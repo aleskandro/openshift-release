@@ -114,10 +114,6 @@ echo "All children terminated."
 for bmhost in $(yq e -o=j -I=0 '.[]' "${SHARED_DIR}/hosts.yaml"); do
   # shellcheck disable=SC1090
   . <(echo "$bmhost" | yq e 'to_entries | .[] | (.key + "=\"" + .value + "\"")')
-  # shellcheck disable=SC2154
-  if [ "${#name}" -eq 0 ] || [ "${ipxe_via_vmedia}" == "false" ] || [ "${#vendor}" -eq 0 ]; then
-    echo "Unable to parse an entry in the hosts.yaml file"
-  fi
   if [ "${ipxe_via_vmedia}" == "true" ]; then
     echo "The host #${host} requires an ipxe image to boot via vmedia in order to perform the pxe boot. The umount is ignored..."
     continue

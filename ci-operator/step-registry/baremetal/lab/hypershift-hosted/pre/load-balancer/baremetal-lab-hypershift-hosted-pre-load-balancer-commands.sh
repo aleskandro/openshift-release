@@ -4,14 +4,20 @@ set -o nounset
 set -o errexit
 set -o pipefail
 
-CLUSTER_NAME="$(<"${SHARED_DIR}/cluster_name")"
+CLUSTER_NAME="$(<"${SHARED_DIR}/hostedcluster_name")"
 
 MC=""
 APISRV=""
 INGRESS80=""
 INGRESS443=""
+KONNECTIVITY=""
+OAUTH_SERVER=""
 echo "Filling the load balancer targets..."
 num_workers="$(yq e '[.[] | select(.name|test("worker-[0-9]"))]|length' "$SHARED_DIR/hosts.yaml")"
+KUBE_API_PORT=$(<"$SHARED_DIR/hosted_kube-apiserver_port")
+IGNITION_PORT=$(<"$SHARED_DIR/hosted_ignition-server-proxy_port")
+KONNECTIVITY_PORT=$(<"$SHARED_DIR/hosted_konnectivity-server_port")
+OAUTH_PORT=$(<"$SHARED_DIR/hosted_oauth-openshift_port")
 # shellcheck disable=SC2154
 for bmhost in $(yq e -o=j -I=0 '.[]' "${SHARED_DIR}/hosts.yaml"); do
   # shellcheck disable=SC1090
@@ -22,31 +28,32 @@ for bmhost in $(yq e -o=j -I=0 '.[]' "${SHARED_DIR}/hosts.yaml"); do
     exit 1
   fi
 
-  if [[ "$name" =~ bootstrap* ]] || [[ "$name" =~ master* ]]; then
-    MC="$MC
-      server $name $ip:22623 check inter 1s
-      server $name-v6 [$ipv6]:22623 check inter 1s"
-    APISRV="$APISRV
-      server $name $ip:6443 check inter 1s
-      server $name-v6 [$ipv6]:6443 check inter 1s"
-  fi
-  if [[ "$name" =~ worker-a-* ]] && [ -e "$SHARED_DIR/deploy_hypershift_hosted" ]; then
-    echo "Skipping the worker-a-* as they are meant to belong to an hypershift hosted cluster"
-    continue
-  fi
-  # if number of worker hosts less then 2, then master hosts might get the worker role
-  if [ "$num_workers" -lt 2 ] || [[ "$name" =~ worker* ]]; then
+  # We use the additional workers implemented for heterogeneous clusters as nodes for the hypershift hosted cluster
+  if [[ "$name" =~ worker-a-* ]]; then
     INGRESS80="$INGRESS80
-      server $name $ip:80 check inter 1s
-      server $name-v6 [$ipv6]:80 check inter 1s"
+      server $name $ip:30080 check inter 1s
+      server $name-v6 [$ipv6]:30080 check inter 1s"
     INGRESS443="$INGRESS443
-      server $name $ip:443 check inter 1s
-      server $name-v6 [$ipv6]:443 check inter 1s"
+      server $name $ip:30443 check inter 1s
+      server $name-v6 [$ipv6]:30443 check inter 1s"
+  elif [[ "$name" =~ worker-* ]]; then
+     MC="$MC
+       server $name $ip:${IGNITION_PORT} check inter 1s
+       server $name-v6 [$ipv6]:${IGNITION_PORT} check inter 1s"
+     APISRV="$APISRV
+       server $name $ip:$KUBE_API_PORT check inter 1s
+       server $name-v6 [$ipv6]:$KUBE_API_PORT check inter 1s"
+     KONNECTIVITY="$KONNECTIVITY
+       server $name $ip:${KONNECTIVITY_PORT} check inter 1s
+       server $name-v6 [$ipv6]:${KONNECTIVITY_PORT} check inter 1s"
+     OAUTH_SERVER="$OAUTH_SERVER
+       server $name $ip:${OAUTH_PORT} check inter 1s
+       server $name-v6 [$ipv6]:${OAUTH_PORT} check inter 1s"
   fi
 done
 echo "Generating the template..."
 
-cat > "$SHARED_DIR/haproxy.cfg" <<EOF
+cat > "$SHARED_DIR/haproxy-hypershift-hosted.cfg" <<EOF
 global
 log         127.0.0.1 local2
 pidfile     /var/run/haproxy.pid
@@ -79,12 +86,12 @@ stats show-node
 stats show-desc Stats for $CLUSTER_NAME cluster
 stats auth admin:$CLUSTER_NAME
 stats uri /stats
-listen api-server-6443
-    bind *:6443
+listen api-server-$KUBE_API_PORT
+    bind *:$KUBE_API_PORT
     mode tcp
 $APISRV
-listen machine-config-server-22623
-    bind *:22623
+listen machine-config-server-${IGNITION_PORT}
+    bind *:${IGNITION_PORT}
     mode tcp
 $MC
 listen ingress-router-80
@@ -97,8 +104,16 @@ listen ingress-router-443
     mode tcp
     balance source
 $INGRESS443
+listen oauth-${OAUTH_PORT}
+    bind *:${OAUTH_PORT}
+    mode tcp
+${OAUTH_SERVER}
+listen konnectivity-${KONNECTIVITY_PORT}
+    bind *:${KONNECTIVITY_PORT}
+    mode tcp
+${KONNECTIVITY}
 EOF
 
 echo "Templating for HAProxy done..."
 
-cat "${SHARED_DIR}/haproxy.cfg"
+cat "${SHARED_DIR}/haproxy-hypershift-hosted.cfg"
