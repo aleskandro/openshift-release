@@ -47705,7 +47705,7 @@ periodics:
   interval: 168h
   labels:
     ci-operator.openshift.io/cloud: aws
-    ci-operator.openshift.io/cloud-cluster-profile: aws-2
+    ci-operator.openshift.io/cloud-cluster-profile: aws-1-qe
     ci-operator.openshift.io/variant: cnv-nightly-4.18
     ci.openshift.io/generator: prowgen
     ci.openshift.io/no-builds: "true"
